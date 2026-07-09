@@ -74,29 +74,65 @@ def renderTemplate(template, row, cols, readLabel) {
     return out
 }
 
-// Stages one file under its rendered name. Writes directly under samplesDir
-// (rather than via publishDir) so file_op's meaning is unambiguous: chaining our
-// own symlink/link/copy with a second publishDir-level transformation risks
-// double-hop symlink chains or silently dereferencing when the caller asked for
-// a symlink. original.toRealPath() collapses Nextflow's own staging symlink so a
-// 'symlink' request points straight at the true source file, not a chain through
-// the task work directory.
-process STAGE_FILE {
+// Gives the staged input its rendered name inside the task's own work
+// directory; publishDir then exposes that tracked output under samplesDir
+// using ordinary Nextflow semantics. file_op's values (symlink/link/copy) are
+// literally Nextflow's own publishDir mode vocabulary -- but publishDir's
+// 'mode' (and 'enabled') directives don't accept per-task dynamic closures in
+// this Nextflow version (only 'path' does: a closure for 'mode' throws
+// "No signature of method PublishDir.setMode()", and 'enabled' silently never
+// fires, confirmed by direct testing). Since file_op never actually varies
+// *within* one SAMPLE_RENAME invocation, three thin variants -- selected once
+// per invocation below, not per task -- give each its own static, correctly
+// behaving mode instead of fighting that limitation.
+process STAGE_FILE_SYMLINK {
     tag "$newName"
+    publishDir path: { samplesDir }, mode: 'symlink'
 
     input:
     tuple val(rowIdx), val(col), val(newName), path(original)
     val samplesDir
-    val fileOp
 
     output:
-    tuple val(rowIdx), val(col), val("${samplesDir}/${newName}")
+    tuple val(rowIdx), val(col), path(newName)
 
     script:
-    def cmd = fileOp == 'copy' ? 'cp' : (fileOp == 'link' ? 'ln' : 'ln -s')
     """
-    mkdir -p ${samplesDir}
-    ${cmd} ${original.toRealPath()} ${samplesDir}/${newName}
+    mv $original $newName
+    """
+}
+
+process STAGE_FILE_LINK {
+    tag "$newName"
+    publishDir path: { samplesDir }, mode: 'link'
+
+    input:
+    tuple val(rowIdx), val(col), val(newName), path(original)
+    val samplesDir
+
+    output:
+    tuple val(rowIdx), val(col), path(newName)
+
+    script:
+    """
+    mv $original $newName
+    """
+}
+
+process STAGE_FILE_COPY {
+    tag "$newName"
+    publishDir path: { samplesDir }, mode: 'copy'
+
+    input:
+    tuple val(rowIdx), val(col), val(newName), path(original)
+    val samplesDir
+
+    output:
+    tuple val(rowIdx), val(col), path(newName)
+
+    script:
+    """
+    mv $original $newName
     """
 }
 
@@ -134,8 +170,13 @@ workflow SAMPLE_RENAME {
     def template = resolveTemplate(name_template)
     validateTemplatePlaceholders(template, cols)
 
-    def samplesDir     = "${outdir}/samples"
-    def samplesheetDir = "${outdir}/samplesheet"
+    // publishDir resolves a relative path against the launch directory correctly
+    // on its own, regardless of a task's own work-directory cwd -- this
+    // absolutization is only so the *recorded* samplesheet paths are portable to
+    // a consumer launched from a different directory, not a correctness workaround.
+    def absOutdir      = file(outdir).toAbsolutePath().normalize().toString()
+    def samplesDir     = "${absOutdir}/samples"
+    def samplesheetDir = "${absOutdir}/samplesheet"
 
     // Stable row identity, since process completion order isn't guaranteed and we
     // need to splice staged paths back onto the correct original row later.
@@ -169,14 +210,21 @@ workflow SAMPLE_RENAME {
     def renameCh = channel.fromList(tasks)
         .map { t -> tuple(t.rowIdx, t.col, t.newName, file(t.orig)) }
 
-    STAGE_FILE(renameCh, samplesDir, file_op)
+    def stagedCh
+    if (file_op == 'symlink')    { STAGE_FILE_SYMLINK(renameCh, samplesDir); stagedCh = STAGE_FILE_SYMLINK.out }
+    else if (file_op == 'link') { STAGE_FILE_LINK(renameCh, samplesDir);    stagedCh = STAGE_FILE_LINK.out }
+    else if (file_op == 'copy') { STAGE_FILE_COPY(renameCh, samplesDir);    stagedCh = STAGE_FILE_COPY.out }
+    else error "Unknown file_op '${file_op}' -- expected one of: symlink, link, copy"
 
     // Rejoin staged paths back onto their row: group the (possibly several, e.g.
     // R1 and R2) staged-file completions that belong to the same row, merge them
     // into one column-update map, then splice that onto the original row so every
-    // other column passes through untouched.
-    def outputRows = STAGE_FILE.out
-        .map { rowIdx, col, finalPath -> tuple(rowIdx, [(col): finalPath]) }
+    // other column passes through untouched. stagedCh's path is anchored in the
+    // task's own work directory, not samplesDir (publishDir doesn't change what a
+    // process emits downstream) -- so only its filename is used, and the
+    // published path is reconstructed from samplesDir, which we already know.
+    def outputRows = stagedCh
+        .map { rowIdx, col, staged -> tuple(rowIdx, [(col): "${samplesDir}/${staged.name}"]) }
         .groupTuple()
         .map { rowIdx, updates -> tuple(rowIdx, updates.inject([:]) { acc, m -> acc + m }) }
         .map { rowIdx, updates -> rowById[rowIdx] + updates }
@@ -194,7 +242,7 @@ workflow SAMPLE_RENAME {
 
     emit:
     samplesheet = samplesheetCh
-    samples     = STAGE_FILE.out
+    samples     = stagedCh
 }
 
 workflow {

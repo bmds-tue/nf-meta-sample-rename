@@ -120,4 +120,32 @@ FLHCC01,${projectDir}/test/testdata/SRX002_SRR002_1.fastq.gz,
             assert (workflow.stdout + workflow.stderr).any { it.contains('duplicate filenames') }
         }
     }
+
+    test("regression: a relative outdir still stages files where the samplesheet says, not inside a task work directory") {
+
+        when {
+            params {
+                def sheet = new File("${launchDir}/samplesheet.csv")
+                sheet.text = """sample,fastq_1,fastq_2
+FLHCC01,${projectDir}/test/testdata/SRX001_SRR001_1.fastq.gz,${projectDir}/test/testdata/SRX001_SRR001_2.fastq.gz
+"""
+                samplesheet   = sheet.path
+                read_cols     = 'fastq_1=R1,fastq_2=R2'
+                name_template = '{sample}_{read}.fastq.gz'
+                outdir        = "out_sample_rename_relative"
+            }
+        }
+
+        then {
+            assert workflow.success
+            def r1 = path("${launchDir}/out_sample_rename_relative/samples/FLHCC01_R1.fastq.gz")
+            assert r1.exists()
+            assert r1.text == 'R1-CONTENT-SAMPLE1\n'
+
+            def sheetOut = path("${launchDir}/out_sample_rename_relative/samplesheet/samplesheet.csv")
+            assert sheetOut.exists()
+            // the recorded path must also be the real absolute location, not the bare relative string
+            assert sheetOut.readLines().any { it.contains("${launchDir}/out_sample_rename_relative/samples/FLHCC01_R1.fastq.gz") }
+        }
+    }
 }

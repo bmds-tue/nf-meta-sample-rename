@@ -86,28 +86,28 @@ colliding names listed rather than silently overwriting one with the other.
 
 ## `file_op`
 
-How each renamed file relates to its original:
+How each renamed file relates to its original. Each value is implemented as a
+standard Nextflow `publishDir` mode (a process gives the staged input its
+rendered name, and `publishDir` exposes that tracked output under
+`<outdir>/samples/`) -- not a hand-rolled shell operation against an external
+path, so it gets Nextflow's usual provenance tracking and executor portability
+for free:
 
-| Value | Mechanism | When to use |
+| Value | `publishDir` mode | When to use |
 |---|---|---|
-| `symlink` (default) | `ln -s` | Fast, no data duplication. Matches the manual rename workaround this adapter replaces. |
-| `link` | `ln` (hardlink) | Same filesystem only; behaves as a genuine regular file for tools that refuse to follow symlinks. |
-| `copy` | `cp` | Always portable; needed when crossing storage backends, at the cost of duplicating the file's bytes. |
+| `symlink` (default) | `symlink` | Fast, no data duplication. Matches the manual rename workaround this adapter replaces. |
+| `link` | `link` (hardlink) | Same filesystem only; behaves as a genuine regular file for tools that refuse to follow symlinks. |
+| `copy` | `copy` | Always portable; needed when crossing storage backends, at the cost of duplicating the file's bytes. |
 
-Renamed files are written directly under `<outdir>/samples/` (not via
-`publishDir`) so `file_op`'s meaning is unambiguous -- chaining our own
-symlink/link/copy with a second publishDir-level transformation risks
-double-hop symlink chains or silently dereferencing a symlink into a full copy.
-The original's real path is resolved (`toRealPath()`) before linking/copying,
-so a `symlink` request points straight at the true source file rather than
-through Nextflow's own staging symlink.
-
-**Known limitation:** because of the above, `outdir` must be reachable from
-wherever the task actually executes (fine for local/Docker/shared-filesystem
-HPC, which is how this connector is used today; not for isolated cloud
-executors with no shared mount to an arbitrary output path). This is the same
-assumption `nf-meta-samplesheet-ops`' `collectFile(storeDir:)` already makes,
-not a new constraint.
+**Known characteristic of `symlink` (standard Nextflow behavior, not specific
+to this adapter):** the published symlink points at the file inside Nextflow's
+own `work/` directory, not directly at the original source -- this is how
+`publishDir mode: 'symlink'` behaves everywhere in the Nextflow ecosystem (it's
+in fact the *default* publish mode used by most nf-core pipelines). It means
+the published file stops resolving if `work/` is cleaned (`nextflow clean`)
+before it's needed. If you plan to clean work directories promptly, use
+`copy` (always independent) or `link` (independent as long as source and
+`outdir` share a filesystem).
 
 ## Test
 
