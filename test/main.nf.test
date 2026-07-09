@@ -1,0 +1,123 @@
+import java.nio.file.Files
+import java.nio.file.Paths
+
+nextflow_pipeline {
+
+    name "Test SAMPLE_RENAME connector"
+    script "main.nf"
+
+    test("renames paired + single-end reads, passes through metadata, honors non-standard placeholders, defaults to symlink") {
+
+        when {
+            params {
+                def sheet = new File("${launchDir}/samplesheet.csv")
+                sheet.text = """sample,donor,fastq_1,fastq_2
+FLHCC01,HCC01,${projectDir}/test/testdata/SRX001_SRR001_1.fastq.gz,${projectDir}/test/testdata/SRX001_SRR001_2.fastq.gz
+HV1,HV1,${projectDir}/test/testdata/SRX002_SRR002_1.fastq.gz,
+"""
+                samplesheet   = sheet.path
+                read_cols     = 'fastq_1=R1,fastq_2=R2'
+                name_template = '{donor}_{sample}_{read}.fastq.gz'
+                outdir        = "${launchDir}/results"
+            }
+        }
+
+        then {
+            assert workflow.success
+
+            def r1  = path("${launchDir}/results/samples/HCC01_FLHCC01_R1.fastq.gz")
+            def r2  = path("${launchDir}/results/samples/HCC01_FLHCC01_R2.fastq.gz")
+            def hv1 = path("${launchDir}/results/samples/HV1_HV1_R1.fastq.gz")
+            assert r1.exists()
+            assert r2.exists()
+            assert hv1.exists()
+            assert !path("${launchDir}/results/samples/HV1_HV1_R2.fastq.gz").exists()
+
+            // default file_op is symlink
+            assert Files.isSymbolicLink(Paths.get(r1.toString()))
+            assert Files.isSymbolicLink(Paths.get(hv1.toString()))
+
+            assert r1.text  == 'R1-CONTENT-SAMPLE1\n'
+            assert r2.text  == 'R2-CONTENT-SAMPLE1\n'
+            assert hv1.text == 'R1-CONTENT-SAMPLE2\n'
+
+            def sheetOut = path("${launchDir}/results/samplesheet/samplesheet.csv")
+            assert sheetOut.exists()
+            def lines = sheetOut.readLines()
+            assert lines[0] == 'sample,donor,fastq_1,fastq_2'
+            assert lines.any { it == "FLHCC01,HCC01,${launchDir}/results/samples/HCC01_FLHCC01_R1.fastq.gz,${launchDir}/results/samples/HCC01_FLHCC01_R2.fastq.gz" }
+            assert lines.any { it == "HV1,HV1,${launchDir}/results/samples/HV1_HV1_R1.fastq.gz," }
+        }
+    }
+
+    test("file_op=copy produces a real regular file, not a symlink") {
+
+        when {
+            params {
+                def sheet = new File("${launchDir}/samplesheet.csv")
+                sheet.text = """sample,fastq_1,fastq_2
+FLHCC01,${projectDir}/test/testdata/SRX001_SRR001_1.fastq.gz,${projectDir}/test/testdata/SRX001_SRR001_2.fastq.gz
+"""
+                samplesheet   = sheet.path
+                read_cols     = 'fastq_1=R1,fastq_2=R2'
+                name_template = '{sample}_{read}.fastq.gz'
+                file_op       = 'copy'
+                outdir        = "${launchDir}/results"
+            }
+        }
+
+        then {
+            assert workflow.success
+            def r1 = path("${launchDir}/results/samples/FLHCC01_R1.fastq.gz")
+            assert r1.exists()
+            assert !Files.isSymbolicLink(Paths.get(r1.toString()))
+            assert r1.text == 'R1-CONTENT-SAMPLE1\n'
+        }
+    }
+
+    test("10x_mkfastq preset expands correctly") {
+
+        when {
+            params {
+                def sheet = new File("${launchDir}/samplesheet.csv")
+                sheet.text = """sample,fastq_1,fastq_2
+FLHCC01,${projectDir}/test/testdata/SRX001_SRR001_1.fastq.gz,${projectDir}/test/testdata/SRX001_SRR001_2.fastq.gz
+HV1,${projectDir}/test/testdata/SRX002_SRR002_1.fastq.gz,
+"""
+                samplesheet   = sheet.path
+                read_cols     = 'fastq_1=R1,fastq_2=R2'
+                name_template = '10x_mkfastq'
+                outdir        = "${launchDir}/results"
+            }
+        }
+
+        then {
+            assert workflow.success
+            assert path("${launchDir}/results/samples/FLHCC01_S1_L001_R1_001.fastq.gz").exists()
+            assert path("${launchDir}/results/samples/FLHCC01_S1_L001_R2_001.fastq.gz").exists()
+            assert path("${launchDir}/results/samples/HV1_S1_L001_R1_001.fastq.gz").exists()
+        }
+    }
+
+    test("duplicate rendered filenames fail fast before staging") {
+
+        when {
+            params {
+                def sheet = new File("${launchDir}/samplesheet.csv")
+                sheet.text = """sample,fastq_1,fastq_2
+FLHCC01,${projectDir}/test/testdata/SRX001_SRR001_1.fastq.gz,${projectDir}/test/testdata/SRX001_SRR001_2.fastq.gz
+FLHCC01,${projectDir}/test/testdata/SRX002_SRR002_1.fastq.gz,
+"""
+                samplesheet   = sheet.path
+                read_cols     = 'fastq_1=R1,fastq_2=R2'
+                name_template = '{sample}_{read}.fastq.gz'
+                outdir        = "${launchDir}/results"
+            }
+        }
+
+        then {
+            assert !workflow.success
+            assert (workflow.stdout + workflow.stderr).any { it.contains('duplicate filenames') }
+        }
+    }
+}
