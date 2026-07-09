@@ -1,0 +1,104 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://raw.githubusercontent.com/bmds-tue/nf-meta-sample-rename/main/nextflow_schema.json",
+    "title": "nf-meta-sample-rename pipeline parameters",
+    "description": "Generalized Nextflow adapter that stages (symlinks/hardlinks/copies) the file(s) referenced by each row of a samplesheet under names rendered from a template, and writes a new samplesheet pointing at the renamed files.",
+    "type": "object",
+    "$defs": {
+        "input_output_options": {
+            "title": "Input/output options",
+            "type": "object",
+            "fa_icon": "fas fa-terminal",
+            "description": "The input samplesheet, which of its columns hold files to rename, and where/how the result is written.",
+            "required": ["samplesheet", "read_cols", "name_template", "outdir"],
+            "properties": {
+                "samplesheet": {
+                    "type": "string",
+                    "description": "Path to the input CSV/TSV samplesheet.",
+                    "help_text": "Every column is passed through to the output samplesheet unchanged except the columns named in read_cols, whose values are replaced with the renamed file's path. Delimiter is auto-detected from the file extension.",
+                    "format": "file-path",
+                    "exists": true,
+                    "pattern": "^\\S+\\.(csv|tsv|tab)$",
+                    "fa_icon": "fas fa-file-csv",
+                    "errorMessage": "samplesheet must be a valid file path with no spaces, ending in .csv, .tsv, or .tab, and must exist."
+                },
+                "read_cols": {
+                    "type": "string",
+                    "description": "Comma-separated column=label pairs identifying which samplesheet columns hold files to rename, and the label each contributes to the '{read}' template placeholder.",
+                    "help_text": "Example: 'fastq_1=R1,fastq_2=R2'. Not limited to paired-end reads -- any number of columns is supported (e.g. add 'index=I1' for an index read), and a row may leave any of these columns blank (e.g. single-end samples mixed into an otherwise paired-end sheet); a row is only an error if *all* configured columns are blank.",
+                    "pattern": "^[^,=\\s]+=[^,=\\s]+(,[^,=\\s]+=[^,=\\s]+)*$",
+                    "fa_icon": "fas fa-columns",
+                    "errorMessage": "read_cols must be a comma-separated list of column=label pairs, e.g. 'fastq_1=R1,fastq_2=R2'."
+                },
+                "name_template": {
+                    "type": "string",
+                    "description": "Output filename template, or the name of a built-in preset.",
+                    "help_text": "A value containing '{' is used as a literal template, e.g. '{sample}_{read}.fastq.gz' -- placeholders are any samplesheet column name, plus the synthetic '{read}' placeholder (the label configured for whichever read_cols column a given file came from). A value with no '{' is looked up as a preset name instead; currently only '10x_mkfastq' ('{sample}_S1_L001_{read}_001.fastq.gz') is built in.",
+                    "minLength": 1,
+                    "fa_icon": "fas fa-file-signature"
+                },
+                "outdir": {
+                    "type": "string",
+                    "format": "directory-path",
+                    "minLength": 1,
+                    "description": "Directory the renamed files and output samplesheet are written under.",
+                    "help_text": "Renamed files are written to '<outdir>/samples/' and the output samplesheet to '<outdir>/samplesheet/'.",
+                    "fa_icon": "fas fa-folder-open"
+                },
+                "outname": {
+                    "type": "string",
+                    "default": "samplesheet.csv",
+                    "description": "Output samplesheet filename, including extension.",
+                    "help_text": "The extension controls the output format: '.csv' writes comma-delimited, '.tsv'/'.tab' writes tab-delimited.",
+                    "pattern": "^\\S+\\.(csv|tsv|tab)$",
+                    "fa_icon": "far fa-file",
+                    "errorMessage": "outname must end in .csv, .tsv, or .tab."
+                },
+                "quote": {
+                    "type": "string",
+                    "default": "\"",
+                    "minLength": 1,
+                    "maxLength": 1,
+                    "description": "Quote character used both when parsing the input samplesheet and when quoting output fields.",
+                    "fa_icon": "fas fa-quote-right"
+                }
+            }
+        },
+        "staging_options": {
+            "title": "Staging options",
+            "type": "object",
+            "fa_icon": "fas fa-copy",
+            "description": "How each renamed file relates to its original.",
+            "properties": {
+                "file_op": {
+                    "type": "string",
+                    "default": "symlink",
+                    "enum": ["symlink", "link", "copy"],
+                    "description": "How to stage each file under its rendered name.",
+                    "help_text": "'symlink' (default) creates a symlink to the original -- fast, no data duplication. 'link' creates a hardlink -- same filesystem only, but behaves as a real file for tools that refuse to follow symlinks. 'copy' duplicates the file's contents -- needed when crossing storage backends.",
+                    "fa_icon": "fas fa-link",
+                    "errorMessage": "file_op must be one of: symlink, link, copy."
+                }
+            }
+        },
+        "generic_options": {
+            "title": "Generic options",
+            "type": "object",
+            "fa_icon": "fas fa-question-circle",
+            "description": "Less common options.",
+            "properties": {
+                "help": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Display help text.",
+                    "fa_icon": "fas fa-question-circle"
+                }
+            }
+        }
+    },
+    "allOf": [
+        {"$ref": "#/$defs/input_output_options"},
+        {"$ref": "#/$defs/staging_options"},
+        {"$ref": "#/$defs/generic_options"}
+    ]
+}
